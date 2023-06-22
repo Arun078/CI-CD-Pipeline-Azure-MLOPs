@@ -1,0 +1,173 @@
+Azure DevOps Orginasation--
+
+My Azure DevOps Organizations--
+
+Create Project - Alena-MLOps
+
+Repos - Import Repo
+
+---- Bulid Pipeline ----
+
+Pipeline - Library - Create Variable Group - 
+                                          AZURE_RM_SVC_CONNECTION                       azure-resource-connection-ak
+                                                                                                  
+                                          BASE_NAME                                     mlopswheyi
+                                                                                                  
+                                          LOCATION                                      eastus
+                                                                                                  
+                                          RESOURCE_GROUP                                mlops-wsh-rg-1
+                                                                                                  
+                                          WORKSPACE_NAME                                mlops-wsh-aml-1
+                                                                                                   
+                                          WORKSPACE_SERVICE_CONNECTION                  aml-workspace-connection
+                                                                                                   
+
+Trigger - Alena-MLOps - Enable continuous integration
+
+Variables - Variable Group - link
+
+Variables - Pipeline variables - amlcompute.clusterName
+                                                                                                       ak-cluster
+                                 amlcompute.idleSecondsBeforeScaledown
+                                                                                                       300 
+                                 amlcompute.maxNodes
+                                                                                                        2
+                                 amlcompute.minNodes
+                                                                                                        0
+                                 amlcompute.vmSize
+                                                                                                        Standard_DS11_V2
+                                 experiment.name
+                                                                                                        insurance_classification
+                                 model.name                                                        
+                                                                                                        insurance_model
+
+
+Pipeline - Create Pipeline - Azure GitRepos - Empty job
+
+Agent job 1 
+
+1.Use Python Version (Python 3.6)   - Save
+
+
+2.Install python libaries (Bash Script) - package_requirement/install_requirements.sh - Advance - Working Directory - package_requirement   -Save
+
+
+3Unit Testing (Bash Script) - inline script - pytest training/train_test.py --doctest-modules --junitxml=junit/test-result.xml -- cov=unit_test --cov-report=xml --cov-report=html   -Save
+
+
+4.Publish Unit Test Results (Publish Test Results ) - JUnit - **/test-*.xml - $(System.DefaultWorkingDirectory)   -Save
+
+
+5.Install Azure CLI ML Extension (Azure CLI) - azure-resource-connection - Shell - Inline Script - az extension add -n azure-cli-ml   -Save
+ 
+
+6.Create AML Workspace (Azure CLI) - azure-resource-connection - shell - inline Script - az ml workspace create -g$(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -l $(LOCATION) --exist-ok --yes   -Save
+
+
+7.Creating Compute Cluster (Azure CLI) - azure-resource-connection - shell - inline Sript - az ml computetarget create         amlcompute -g$(RESOURCE_GROUP) -w$(WORKSPACE_NAME) -n$(amlcompute.clusterName) -s$(amlcompute.vmSize) --min-nodes  $(amlcompute.minNodes) --max-nodes$(amlcompute.maxNodes) --idle-seconds-before-scaledown$(amlcompute.idleSecondsBeforeScaledown)
+  -Save
+
+
+8.Upload data to storage account through datastore(Azure CLI) - azure-resource-connection - shell - inline Sript - az ml datastore upload -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(az ml datastore show-default -w $(WORKSPACE_NAME) -g $(RESOURCE_GROUP) --query name -o tsv) -p data -u insurance --overwrite true - Save
+
+
+9.Creating Metadata and Models Directory on Agent(Bash Script) - inline script - mkdir metadata && mkdir models   -Save
+
+
+10.Training the Model(Azure CLI) - azure-resource-connection - shell - inline Script - az ml run submit-script -g $(RESOURCE_GROUP) -W $(WORKSPACE_NAME) -e $(experiment.name) --ct $(amlcompute.clusterName) -d conda_dependencies.yml -t ../metadata/run.json train_aml.py  -Working Directory -training   -Save
+
+
+11.Register the Models - azure-resource-connection - shell - inline Script - az ml model register -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(model.name) -f metadata/run.json --asset-path outputs/models/insurance_model.pkl -d "Classification model for filing a claim prediction " --tag "data"="insurance" --tag "model"="classification " --model-framework ScikitLearn -t metadata/model.json   -Save
+
+
+12.Downloading the model artifacts - azure-resource-connection - shell - inline Script - az ml model download -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -i $(jq -r .modelId metadata/model.json) -t ./models --overwrite   -Save
+
+
+13.Copy Files to: $(Bulid.ArtifactsStagingDirectory) (Copy Files) - Source Folder - $(Build.SourcesDirectory) - Contents -**/metadata/*
+**/models/*
+**/deployment/*
+**/test/integration/*
+**/packages_requirement/* - Target Folder - $(Build.ArtifactStagingDirectory)  -Save
+
+
+14.Publish Pipeline Artifact (Publish Pipeline Artifact) - File or directory path - $(Build.ArtifactStagingDirectory) - Artifact name - Ciartifacts   -Save
+
+
+
+
+---- Release Pipeline ----
+
+1.Go to Pipepline - Releases - Empty job
+
+2.Add Artifacts - Alena-MLOPs (Project Name) - Alena-MLOps-CI (CI Pipeline) - Add
+
+3.Stages - Change the 'Stage1' as 'Deploy to Staging' 
+
+4.Variables - Link Variables Group
+
+5.Task - Agent job - Agent pool - 'Azure Pipeline' - Agent Specification - 'ubntu-20.04'
+
+6.Python Version 3.6 (Python version)    -Save
+
+7.Install Azure CLI ML Extension (Azure CLI) - azure-resource-connection - Shell - Inline Script - az extension add -n azure-cli-ml   -Save
+ 
+
+8.Deploy to ACI (Azure CLI) - azure-resource-connection - Shell - Inline Script - az ml model deploy -g $(RSOURCE_GROUP) -W $(WORKSPACE_NAME) -n  $(service.name.staging) -f ../metadata/model.json --dc aciDeployment ConfigStaging.yml --ic inferenceConfig --overwrite    -Save
+
+
+9.Variables - Pipeline variables - Add variables -  name->service.name.staging  value->insurance-service-aci  -Save
+
+
+10.Install python libaries (Bash Script) - Script Path->$(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/package_requirement/install_requiremets.sh  - Advanced - Working Directory - $(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/package_requirement    -Save
+
+
+11.Staging Test (Azure CLI) - azure-resource-connection - Shell - Inline Script - pytest staging_test.py --doctest-modules --junitxml=junit/test-results.xml --cov-report=xml --cov-report=html --scoreurl$(az ml service show -g $(RESOURCE_GROUP) -w$(WORKSAPCE_NAME) -n $(service.name.staging) --query scoringUri -o tsv) - Advance - Working Directory - $(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/tests/integration   -Save
+
+
+12.Publish Staging Test Results (Publish Test Results) - Test results files - **/test-*.xml    -Save
+
+
+13.Create Release Pipeline 
+
+
+14.Create a new satges-> Stages - Add - New Stages - Empty job - Deploye to Production(Name Of Stages)    -Save
+
+
+15.Task - Agent job - Agent pool - 'Azure Pipeline' - Agent Specification - 'ubntu-20.04'
+
+
+16.Python Version 3.6 (Python version)    -Save
+
+
+17.Install Azure CLI ML Extension (Azure CLI) - Azure Resource Manager Connection - 'azure-resource-connection' - Script Type - 'Shell' - Script Location - 'Inline Script' ->az extension add -n azure-cli-ml   -Save
+
+
+18.Createing AKS Cluster (Azure CLI) - Azure Resource Manager Connection - 'azure-resource-connection' - Script Type - 'Shell' - Script Location - 'Inline Script' ->az ml computetarget create aks -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(aks.clusterName) -s $(aks.vmSize) -a $(aks.agentCount) -l eastus  -Save
+
+
+19.Variables - Pipeline variables - Add variables -  name->aks.clusterName, aks.vmSize, aks.agentCount  value->ak-cluster, Standard_A2_v2, 3   -Save
+
+
+20.Deploye to AKS (Azure CLI) - Azure Resource Manager Connection - 'azure-resource-connection' - Script Type - 'Shell' - Script Location - 'Inline Script' ->az ml model deploye -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(service.name.prod) -f../metadata/model.json --dc aksDeployementConfigProd.yml --ic inferenceConfig.yml --ct $(aks.clusterName) --overwrite - Advance - Working Directory - $(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/Ciartifacts/deployment   -Save
+
+
+21.Variables - Pipeline variables - Add variables -  name->service.name.prod  value->insurance-service-aks   -Save
+
+
+22.Install python libaries (Bash Script) - Script Path->$(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/package_requirement/install_requiremets.sh  - Advanced - Working Directory - $(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/package_requirement    -Save
+
+
+23.Production Testing (Azure CLI) - Azure Resource Manager Connection - 'azure-resource-connection' - Script Type - 'Shell' - Script Location - 'Inline Script' ->pytest prod_test.py --doctest-modules --junitxml=junit/test-results.xml --cov=integration_test --cov-report=xml --cov-report=html  --scoreurl$(az ml service show -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(service.name.prod) --query scoringUri -o tsv --scorkey $(az ml service get-keys -g $(RESOURCE_GROUP) -w $(WORKSPACE_NAME) -n $(service.name.prod) --query primaryKey -o tsv) - Advance - Working Directory - $(system.DefaultWorkingDirectory)_CICDALMLOPs-CI/Ciartifacts/Ciartifacts/tests/integration   
+-Save
+
+
+24.Publish Production Test Results (Publish Test Results) - Test results files - **/test-*.xml    -Save
+
+
+25.Pre Deployement Condition - Pre-deployment approvals - Enabled - Approvers - 'UserID'  -Save
+
+
+26.Save the Pipeline and Create Release Pipeline 
+
+
+
